@@ -428,11 +428,8 @@ func buildGenericConfig(
 		if err != nil {
 			return
 		}
-		proxyTLSClientConfig := &tls.Config{InsecureSkipVerify: true}
-		finalProxyTransport = utilnet.SetOldTransportDefaults(&http.Transport{
-			DialContext:     dialer,
-			TLSClientConfig: proxyTLSClientConfig,
-		})
+		// overrid the dialer to connext to apiserver-network-proxy
+		finalProxyTransport.DialContext = dialer
 	}
 
 	genericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(generatedopenapi.GetOpenAPIDefinitions, openapinamer.NewDefinitionNamer(legacyscheme.Scheme, extensionsapiserver.Scheme, aggregatorscheme.Scheme))
