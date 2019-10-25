@@ -169,7 +169,7 @@ func CreateServerChain(completedOptions completedServerRunOptions, stopCh <-chan
 		return nil, err
 	}
 
-	kubeAPIServerConfig, insecureServingInfo, serviceResolver, pluginInitializer, proxyTransport, err := CreateKubeAPIServerConfig(completedOptions, nodeTunneler, proxyTransport)
+	kubeAPIServerConfig, insecureServingInfo, serviceResolver, pluginInitializer, err := CreateKubeAPIServerConfig(completedOptions, nodeTunneler, proxyTransport)
 	if err != nil {
 		return nil, err
 	}
@@ -276,17 +276,16 @@ func CreateKubeAPIServerConfig(
 	*genericapiserver.DeprecatedInsecureServingInfo,
 	aggregatorapiserver.ServiceResolver,
 	[]admission.PluginInitializer,
-	*http.Transport,
 	error,
 ) {
-	genericConfig, versionedInformers, insecureServingInfo, serviceResolver, pluginInitializers, admissionPostStartHook, storageFactory, proxyTransport, err := buildGenericConfig(s.ServerRunOptions, proxyTransport)
+	genericConfig, versionedInformers, insecureServingInfo, serviceResolver, pluginInitializers, admissionPostStartHook, storageFactory, err := buildGenericConfig(s.ServerRunOptions, proxyTransport)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	if _, port, err := net.SplitHostPort(s.Etcd.StorageConfig.Transport.ServerList[0]); err == nil && port != "0" && len(port) != 0 {
 		if err := utilwait.PollImmediate(etcdRetryInterval, etcdRetryLimit*etcdRetryInterval, preflight.EtcdConnection{ServerList: s.Etcd.StorageConfig.Transport.ServerList}.CheckEtcdServers); err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("error waiting for etcd connection: %v", err)
+			return nil, nil, nil, nil, fmt.Errorf("error waiting for etcd connection: %v", err)
 		}
 	}
 
@@ -303,7 +302,7 @@ func CreateKubeAPIServerConfig(
 
 	serviceIPRange, apiServerServiceIP, err := master.ServiceIPRange(s.PrimaryServiceClusterIPRange)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// defaults to empty range and ip
@@ -312,17 +311,17 @@ func CreateKubeAPIServerConfig(
 	if s.SecondaryServiceClusterIPRange.IP != nil {
 		secondaryServiceIPRange, _, err = master.ServiceIPRange(s.SecondaryServiceClusterIPRange)
 		if err != nil {
-			return nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 
 	clientCA, err := readCAorNil(s.Authentication.ClientCert.ClientCA)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	requestHeaderProxyCA, err := readCAorNil(s.Authentication.RequestHeader.ClientCAFile)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	config := &master.Config{
@@ -365,7 +364,7 @@ func CreateKubeAPIServerConfig(
 		},
 	}
 	if err := config.GenericConfig.AddPostStartHook("start-kube-apiserver-admission-initializer", admissionPostStartHook); err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	if nodeTunneler != nil {
@@ -377,7 +376,7 @@ func CreateKubeAPIServerConfig(
 		config.ExtraConfig.KubeletClientConfig.Lookup = config.GenericConfig.EgressSelector.Lookup
 	}
 
-	return config, insecureServingInfo, serviceResolver, pluginInitializers, proxyTransport, nil
+	return config, insecureServingInfo, serviceResolver, pluginInitializers, nil
 }
 
 // BuildGenericConfig takes the master server options and produces the genericapiserver.Config associated with it
@@ -392,10 +391,8 @@ func buildGenericConfig(
 	pluginInitializers []admission.PluginInitializer,
 	admissionPostStartHook genericapiserver.PostStartHookFunc,
 	storageFactory *serverstorage.DefaultStorageFactory,
-	finalProxyTransport *http.Transport,
 	lastErr error,
 ) {
-	finalProxyTransport = proxyTransport
 	genericConfig = genericapiserver.NewConfig(legacyscheme.Codecs)
 	genericConfig.MergedResourceConfig = master.DefaultAPIResourceConfigSource()
 
@@ -423,13 +420,13 @@ func buildGenericConfig(
 	}
 
 	if genericConfig.EgressSelector != nil {
-		networkContext := egressselector.NetworkContext{EgressSelectionName: egressselector.Cluster}
+		networkContext := egressselector.Cluster.AsNetworkContext()
 		dialer, err := genericConfig.EgressSelector.Lookup(networkContext)
 		if err != nil {
 			return
 		}
 		// overrid the dialer to connext to apiserver-network-proxy
-		finalProxyTransport.DialContext = dialer
+		proxyTransport.DialContext = dialer
 	}
 
 	genericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(generatedopenapi.GetOpenAPIDefinitions, openapinamer.NewDefinitionNamer(legacyscheme.Scheme, extensionsapiserver.Scheme, aggregatorscheme.Scheme))
@@ -499,7 +496,7 @@ func buildGenericConfig(
 	}
 	serviceResolver = buildServiceResolver(s.EnableAggregatorRouting, genericConfig.LoopbackClientConfig.Host, versionedInformers)
 
-	authInfoResolverWrapper := webhook.NewDefaultAuthenticationInfoResolverWrapper(finalProxyTransport, genericConfig.LoopbackClientConfig)
+	authInfoResolverWrapper := webhook.NewDefaultAuthenticationInfoResolverWrapper(proxyTransport, genericConfig.LoopbackClientConfig)
 
 	lastErr = s.Audit.ApplyTo(
 		genericConfig,
@@ -515,7 +512,7 @@ func buildGenericConfig(
 		return
 	}
 
-	pluginInitializers, admissionPostStartHook, err = admissionConfig.New(finalProxyTransport, serviceResolver)
+	pluginInitializers, admissionPostStartHook, err = admissionConfig.New(proxyTransport, serviceResolver)
 	if err != nil {
 		lastErr = fmt.Errorf("failed to create admission plugin initializer: %v", err)
 		return
